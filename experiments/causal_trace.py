@@ -9,7 +9,7 @@ import torch
 from datasets import load_dataset
 from matplotlib import pyplot as plt
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
 from dsets import KnownsDataset
 from rome.tok_dataset import (
@@ -460,20 +460,30 @@ class ModelAndTokenizer:
     ):
         if tokenizer is None:
             assert model_name is not None
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if model_name == 'stanfordnlp/backpack-gpt2':
+                tokenizer = AutoTokenizer.from_pretrained('gpt2')
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
         if model is None:
             assert model_name is not None
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name, low_cpu_mem_usage=low_cpu_mem_usage, torch_dtype=torch_dtype
-            )
+            if model_name == 'stanfordnlp/backpack-gpt2':
+                config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+                model = AutoModelForCausalLM.from_pretrained(model_name, config=config, trust_remote_code=True)
+                model.old_forward = model.forward
+                model.forward = lambda *args, **kwargs: model.old_forward(input_ids=kwargs['input_ids'])
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_name, low_cpu_mem_usage=low_cpu_mem_usage, torch_dtype=torch_dtype
+                )
             nethook.set_requires_grad(False, model)
             model.eval().cuda()
         self.tokenizer = tokenizer
         self.model = model
+
         self.layer_names = [
             n
             for n, m in model.named_modules()
-            if (re.match(r"^(transformer|gpt_neox)\.(h|layers)\.\d+$", n))
+            if (re.match(r"^(transformer|gpt_neox|backpack\.gpt2_model)\.(h|layers)\.\d+$", n))
         ]
         self.num_layers = len(self.layer_names)
 
@@ -496,6 +506,11 @@ def layername(model, num, kind=None):
         if kind == "attn":
             kind = "attention"
         return f'gpt_neox.layers.{num}{"" if kind is None else "." + kind}'
+    if hasattr(model, "backpack"):
+        if kind == "embed":
+            return "backpack.gpt2_model.wte"
+        return f'backpack.gpt2_model.h.{num}{"" if kind is None else "." + kind}'
+
     assert False, "unknown transformer structure"
 
 

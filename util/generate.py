@@ -109,7 +109,11 @@ def generate_fast(
                 past_key_values=past_key_values,
                 use_cache=True,
             )
-            logits, past_key_values = model_out.logits, model_out.past_key_values
+            try:
+                logits, past_key_values = model_out.logits, model_out.past_key_values
+            except AttributeError:
+                logits, past_key_values = model_out.logits, None
+
             softmax_out = torch.nn.functional.softmax(logits[:, -1, :], dim=1)
 
             # Top-k sampling

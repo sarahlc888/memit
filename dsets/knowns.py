@@ -1,6 +1,7 @@
 import json
 import typing
 from pathlib import Path
+import os 
 
 import torch
 from torch.utils.data import Dataset
@@ -16,7 +17,9 @@ class KnownsDataset(Dataset):
         known_loc = data_dir / "known_1000.json"
         if not known_loc.exists():
             print(f"{known_loc} does not exist. Downloading from {REMOTE_URL}")
-            data_dir.mkdir(exist_ok=True, parents=True)
+            print("data_dir", data_dir)
+            os.makedirs(data_dir, exist_ok=True)
+            # data_dir.mkdir(exist_ok=True, parents=True)
             torch.hub.download_url_to_file(REMOTE_URL, known_loc)
 
         with open(known_loc, "r") as f:
