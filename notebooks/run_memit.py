@@ -5,34 +5,7 @@
 # "EleutherAI/pythia-160m"
 save_dir = None 
 # log_dir = 'log_memit_results_layer_tuning'
-log_dir = 'log_memit_results_sweep_2'
-dataset_names = [
-  'company', 
-  'country', 
-  'verbs', 
-  'temporal', 
-  'stereoset', 
-  'gender'
-]
-subject_types = [
-  'true_subject',
-  # 'prefix_subject'
-]
-config_list = []
-for dataset_name in dataset_names:
-  cfg_dataset_name = 'verb' if dataset_name == 'verbs' else dataset_name
-
-  for subject_type in subject_types:
-    config_list.append(
-      {
-        'dataset_path': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/memit_data/{dataset_name}-{subject_type}.jsonl',
-        'eval_ex_yaml': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/configs/mini_merge/{cfg_dataset_name}_full_0.01.yaml',
-        'flip_loss': (dataset_name == 'stereoset'),
-        'use_balance': (dataset_name == 'gender')
-      }
-    )
-
-print("config_list", config_list)
+log_dir = 'log_memit_results_val_10'
 
 ALG_NAME = "MEMIT"
 import json 
@@ -43,6 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 import argparse
 from util import nethook
 from experiments.py.demo import load_alg, HPARAMS_DIR, print_loud
+import os
 import sys
 sys.path.append('/nlp/scr/sachen/backpack_project/backpack-guarantees')
 import utils
@@ -128,19 +102,13 @@ def get_intervention_eval_class(config):
   else:
     return ScoreEvaluator
 
-def eval_model_on_config(model_to_eval, config):
+def eval_model_on_config(model_to_eval, config, cached_general_score={}):
   loss_type = config['training']['loss_type']
 
   # Build the validation function
   degredation_targeted_path = config['validation']['degredation_targeted_path']
   degredation_general_path = config['validation']['degredation_general_path']
   intervention_eval_path = config['validation']['intervention_eval_path']
-
-  print(
-    degredation_targeted_path,
-    degredation_general_path,
-    intervention_eval_path
-  )
 
   degredation_targeted_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + degredation_targeted_path
   degredation_general_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + degredation_general_path
@@ -160,10 +128,20 @@ def eval_model_on_config(model_to_eval, config):
       model_to_eval, tok, eval_type='unconditional', normalize='token')
   
   model_to_eval.eval()
+
   intervention_score = intervention_evaluator.evaluate()
   rest_of_prompt_score = rest_evaluator.evaluate()
-  general_score = general_evaluator.evaluate()
 
+  if len(cached_general_score) > 0:
+    assert degredation_general_path == cached_general_score['degredation_general_path']
+    general_score = cached_general_score['general_score']
+  else:
+    general_score = general_evaluator.evaluate()
+
+    # cache results
+    print("WARNING: USING CACHED RESULTS FOR GENERAL SCORE")
+    cached_general_score['degredation_general_path'] = degredation_general_path
+    cached_general_score['general_score'] = general_score
 
   return {
     'intervention_score': intervention_score,
@@ -225,26 +203,65 @@ if __name__ == '__main__':
   argp = argparse.ArgumentParser()
   argp.add_argument('model_name')
   argp.add_argument('-l', '--override_layers')
+  argp.add_argument('--log_dir')
   argp.add_argument('--v_num_grad_steps', type=int)
   argp.add_argument('--clamp_norm_factor', type=float)
   argp.add_argument('--mom2_update_weight', type=int)
+  argp.add_argument('--kl_factor', type=float)
+
   argp.add_argument('--noedit', dest='noedit', default=False, action='store_true')
 
+  argp.add_argument('-d', '--dataset_names')
+  argp.add_argument('-s', '--subject_types')
+
   args = argp.parse_args()
+
   MODEL_NAME = args.model_name
+  log_dir = 'log_memit_results_val_10' if args.log_dir is None else args.log_dir
+
   override_layers = args.override_layers
   if override_layers is not None:
     override_layers = [int(x) for x in override_layers.split(',')]
-  print("MODEL_NAME", MODEL_NAME)
   override_params = {
     'layers': override_layers,
     'v_num_grad_steps': args.v_num_grad_steps,
     'clamp_norm_factor': args.clamp_norm_factor,
-    'mom2_update_weight': args.mom2_update_weight
+    'mom2_update_weight': args.mom2_update_weight,
+    'kl_factor': args.kl_factor,
   }
-
-
+  print("MODEL_NAME", MODEL_NAME)
+  print("log_dir", log_dir)
   print("override_params", override_params)
+
+  if args.dataset_names is not None:
+    dataset_names = args.dataset_names.split(',')
+  else:
+    dataset_names = ['company', 'country', 'verbs', 'temporal', 'stereoset', 'gender']
+  if args.subject_types is not None:
+    subject_types = args.subject_types.split(',')
+  else:
+    subject_types = ['true_subject', 'prefix_subject']
+
+
+  # load configs
+  config_list = []
+  for dataset_name in dataset_names:
+    cfg_dataset_name = 'verb' if dataset_name == 'verbs' else dataset_name
+
+    for subject_type in subject_types:
+      config_list.append(
+        {
+          'dataset_path': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/memit_data/{dataset_name}-{subject_type}.jsonl',
+          'eval_ex_yaml': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/configs/mini_merge/{cfg_dataset_name}_full_0.01.yaml',
+          'flip_loss': (dataset_name == 'stereoset'),
+          'use_balance': (dataset_name == 'gender')
+        }
+      )
+  print("config_list", config_list)
+  print('='*20)
+  print('='*20)
+  print('='*20)
+
 
   all_results = []
 
@@ -275,21 +292,22 @@ if __name__ == '__main__':
       assert hasattr(model.config, "max_position_embeddings")
       model.config.n_positions = model.config.max_position_embeddings
   tok.pad_token = tok.eos_token
-  generation_prompts = []
 
-  for exp_config_dict in config_list:
+
+  eval_general_cache = {}
+  for i, exp_config_dict in enumerate(config_list):
     dataset_path = exp_config_dict['dataset_path']
     config_path_for_eval = exp_config_dict['eval_ex_yaml']
     config_dict = yaml.safe_load(open(config_path_for_eval))
 
     exp_name = MODEL_NAME.split('/')[-1] + '__' + dataset_path.split('/')[-1].split(".jsonl")[0]
     if args.noedit:
-      eval_results = eval_model_on_config(model, config_dict)
+      eval_results = eval_model_on_config(model, config_dict, eval_general_cache)
       with open(f"{log_dir}/noedit.{exp_name}.json", 'w') as fh:
         print(json.dumps(eval_results), file=fh)
       continue 
 
-    param_keys = ['layers', 'v_num_grad_steps', 'clamp_norm_factor', 'mom2_update_weight']
+    param_keys = ['layers', 'v_num_grad_steps', 'clamp_norm_factor', 'mom2_update_weight', 'kl_factor']
     for k in param_keys:
       if override_params[k] is not None:
         if type(override_params[k]) == list:
@@ -300,6 +318,9 @@ if __name__ == '__main__':
         exp_name += '__na'
         
     print("exp_name", exp_name)
+    if os.path.exists(f"{log_dir}/{exp_name}.json"):
+      print("Results already exist, skipping", exp_name)
+      continue 
 
 
 
