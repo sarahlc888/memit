@@ -10,7 +10,6 @@ log_dir = 'log_memit_results_val_10'
 ALG_NAME = "MEMIT"
 import json 
 import yaml 
-from tqdm import tqdm
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 import argparse
@@ -18,98 +17,33 @@ from util import nethook
 from experiments.py.demo import load_alg, HPARAMS_DIR, print_loud
 import os
 import sys
-sys.path.append('/nlp/scr/sachen/backpack_project/backpack-guarantees')
-import utils
+sys.path.insert(0, '/nlp/scr/sachen/backpack_project/backpack-guarantees')
+import evaluate 
 
-########## eval code copied from elsewhere ##########
-EVAL_BATCH_SIZE = 1
-class ScoreEvaluator:
-  def __init__(self, args, model, tokenizer, eval_type='suffix', loss_type='good', threshold=None, normalize='token'):
-    self.args = args
-    self.model = model
-    self.tokenizer = tokenizer
-    self.threshold = threshold
-    self.normalize = normalize
-    self.data = [json.loads(x) for x in open(args['evaluation_set'])]
-    self.loss_type = loss_type
-    # print(">> INITIALIZING score evaluator")
-    # print(">> normalize", normalize)
-    # print(">> args['evaluation_set']", args['evaluation_set'])
-    # print(">> eval_type", eval_type)
-    if eval_type == 'suffix':
-      self.batches = [x for x in utils.suffix_batch_iterator(self.data, tokenizer, device=model.device, batch_size=EVAL_BATCH_SIZE)]
-    elif eval_type == 'unconditional':
-      self.batches = [x for x in utils.unconditional_batch_iterator(self.data, tokenizer, device=model.device, batch_size=EVAL_BATCH_SIZE)]
 
-  def evaluate(self):
-    total_score = 0
-    total_elts = 0
-    for batch in tqdm(self.batches, desc='scoring'):
-      output = self.model(batch['input_ids']).logits
-      target = utils.target_of_indices(batch['input_ids'])
-      scores = utils.score_suffix(output, target, batch['loss_mask'], reduction='none', reduce=False, loss_type=self.loss_type)
-      if self.normalize == 'token':
-        total_elts += torch.sum(batch['loss_mask']).item()
-      elif self.normalize == 'example':
-        total_elts += torch.sum((torch.sum(batch['loss_mask'], dim=-1)>0)).item()
-      if self.threshold is not None:
-        if self.normalize == 'example':
-          scores = torch.sum(scores, dim=-1)
-        scores = scores > self.threshold # failure rate
-      total_score += torch.sum(scores).item()
-    return total_score/total_elts
-
-class PairEvaluator:
-
-  def __init__(self, args, model, tokenizer, eval_type='suffix', diff_type='max_ratio', loss_type='balance', threshold=None, normalize='token'):
-    self.args = args
-    self.model = model
-    self.normalize = normalize
-    self.tokenizer = tokenizer
-    self.data = [json.loads(x) for x in open(args['evaluation_set'])]
-    self.threshold = threshold
-    self.loss_type = loss_type
-    if eval_type == 'suffix':
-      self.batches = [x for x in utils.pair_suffix_batch_iterator(self.data, tokenizer, device=model.device, batch_size=EVAL_BATCH_SIZE)]
-
-  def evaluate(self):
-    total_score = 0
-    total_elts = 0
-    for batch in self.batches:
-      output1 = self.model(batch['input_ids1']).logits
-      target1 = utils.target_of_indices(batch['input_ids1'])
-      output2 = self.model(batch['input_ids2']).logits
-      target2 = utils.target_of_indices(batch['input_ids2'])
-      #return utils.score_pair_suffix(output1, target1, output2, target2, batch['loss_mask1'], batch['loss_mask2'], self.loss_type).item()
-      scores = utils.score_pair_suffix(output1, target1, output2, target2, batch['loss_mask1'], batch['loss_mask2'], self.loss_type, reduce=False)
-      #if self.normalize == 'token':
-      #  total_elts += torch.sum(batch['loss_mask']).item()
-      if self.normalize == 'example':
-        total_elts += torch.sum((torch.sum(batch['loss_mask1'], dim=-1)>0)).item() # same for both 1 and 2
-      #if self.threshold is not None:
-      #  scores = scores > self.threshold # failure rate
-      if self.threshold is not None:
-        scores = scores > self.threshold # failure rate
-        #if self.normalize == 'example':
-        #  scores = torch.sum(scores, dim=-1)
-      scores = torch.sum(scores).item()
-      total_score += scores
-    return total_score/total_elts
-
+############ Eval code copied from ft_experiment.py ############
 def get_intervention_eval_class(config):
   if config['training']['suffix_pair']:
-    return PairEvaluator
+    return evaluate.PairEvaluator
   else:
-    return ScoreEvaluator
+    return evaluate.ScoreEvaluator
 
-def eval_model_on_config(model_to_eval, config, cached_general_score={}):
+def eval_model_on_config(model_to_eval, config, cached_general_score={}, test_mode=False):
   loss_type = config['training']['loss_type']
 
   # Build the validation function
   degredation_targeted_path = config['validation']['degredation_targeted_path']
   degredation_general_path = config['validation']['degredation_general_path']
   intervention_eval_path = config['validation']['intervention_eval_path']
-
+  if 'hard_negative' in config['validation']:
+    hard_negative_path = config['validation']['hard_negative']['hard_negative_path']
+    hard_negative_eval_type = config['validation']['hard_negative']['eval_type']
+    hard_negative_eval_normalize = "token" if hard_negative_eval_type == "unconditional" else "example"
+  else:
+    if test_mode:
+      raise Exception("No hard negative eval in test mode")
+    print("Warning: skipping hard negative eval")
+    
   degredation_targeted_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + degredation_targeted_path
   degredation_general_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + degredation_general_path
   intervention_eval_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + intervention_eval_path
@@ -120,10 +54,15 @@ def eval_model_on_config(model_to_eval, config, cached_general_score={}):
   intervention_eval_class = get_intervention_eval_class(config)
   intervention_evaluator = intervention_eval_class(
       {'evaluation_set':intervention_eval_path}, model_to_eval, tok, loss_type=loss_type, threshold=threshold, normalize=normalize)
-  rest_evaluator = ScoreEvaluator(
+  if 'hard_negative' in config['validation']:
+    hard_negative_path = '/nlp/scr/sachen/backpack_project/backpack-guarantees/' + hard_negative_path
+    hard_negative_evaluator = evaluate.ScoreEvaluator(
+      {'evaluation_set':hard_negative_path}, 
+      model, tok, eval_type=hard_negative_eval_type, normalize=hard_negative_eval_normalize)
+  rest_evaluator = evaluate.ScoreEvaluator(
       {'evaluation_set':degredation_targeted_path},
       model_to_eval, tok, eval_type='unconditional', normalize='token')
-  general_evaluator = ScoreEvaluator(
+  general_evaluator = evaluate.ScoreEvaluator(
       {'evaluation_set':degredation_general_path},
       model_to_eval, tok, eval_type='unconditional', normalize='token')
   
@@ -131,15 +70,18 @@ def eval_model_on_config(model_to_eval, config, cached_general_score={}):
 
   intervention_score = intervention_evaluator.evaluate()
   rest_of_prompt_score = rest_evaluator.evaluate()
+  hard_negative_score = None
+  if 'hard_negative' in config['validation']:
+    hard_negative_score = hard_negative_evaluator.evaluate()
 
   if len(cached_general_score) > 0:
+    print("WARNING: USING CACHED RESULTS FOR GENERAL SCORE") # note: this was originally in the wrong place
     assert degredation_general_path == cached_general_score['degredation_general_path']
     general_score = cached_general_score['general_score']
   else:
     general_score = general_evaluator.evaluate()
 
     # cache results
-    print("WARNING: USING CACHED RESULTS FOR GENERAL SCORE")
     cached_general_score['degredation_general_path'] = degredation_general_path
     cached_general_score['general_score'] = general_score
 
@@ -147,6 +89,7 @@ def eval_model_on_config(model_to_eval, config, cached_general_score={}):
     'intervention_score': intervention_score,
     'general_score': general_score,
     'rest_of_prompt_score': rest_of_prompt_score,
+    'hard_negative_score': hard_negative_score,
   }
 #####################################################
 from typing import Dict, List, Tuple
@@ -210,11 +153,19 @@ if __name__ == '__main__':
   argp.add_argument('--kl_factor', type=float)
 
   argp.add_argument('--noedit', dest='noedit', default=False, action='store_true')
+  argp.add_argument('--test_mode', dest='test_mode', default=False, action='store_true')
 
   argp.add_argument('-d', '--dataset_names')
   argp.add_argument('-s', '--subject_types')
+  argp.add_argument('--override_exp_name')
+  argp.add_argument('--seed')
 
   args = argp.parse_args()
+
+  if args.seed is not None:
+    import random
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
   MODEL_NAME = args.model_name
   log_dir = 'log_memit_results_val_10' if args.log_dir is None else args.log_dir
@@ -242,17 +193,31 @@ if __name__ == '__main__':
   else:
     subject_types = ['true_subject', 'prefix_subject']
 
+  dname_cfg_map = {
+    'company': 'company_ceo', 'country': 'country_capital', 'verbs': 'verb_conjugation', 
+    'temporal': 'temporal', 'stereoset': 'stereoset', 'gender': 'pronoun_gender_bias'
+  }
 
   # load configs
   config_list = []
   for dataset_name in dataset_names:
-    cfg_dataset_name = 'verb' if dataset_name == 'verbs' else dataset_name
+    cfg_dataset_name = dname_cfg_map[dataset_name]
 
     for subject_type in subject_types:
+
+      if args.test_mode:
+        f_dataset_name = 'verb' if dataset_name == 'verbs' else dataset_name
+        eval_ex_yaml = (f'/nlp/scr/sachen/backpack_project/backpack-guarantees/configs/test/'
+          f'test-stanfordnlp-backpack-gpt2-{f_dataset_name}-full-0.0001-0.yaml')
+        dataset_path = f'/nlp/scr/sachen/backpack_project/backpack-guarantees/memit_data/test/{dataset_name}-{subject_type}.jsonl'
+      else:
+        eval_ex_yaml = f'/nlp/scr/sachen/backpack_project/backpack-guarantees/configs/{cfg_dataset_name}/backpack_sweep/stanfordnlp-backpack-gpt2-full.0.sweep.yaml'
+        dataset_path = f'/nlp/scr/sachen/backpack_project/backpack-guarantees/memit_data/val/{dataset_name}-{subject_type}.jsonl'
+
       config_list.append(
         {
-          'dataset_path': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/memit_data/{dataset_name}-{subject_type}.jsonl',
-          'eval_ex_yaml': f'/nlp/scr/sachen/backpack_project/backpack-guarantees/configs/mini_merge/{cfg_dataset_name}_full_0.01.yaml',
+          'dataset_path': dataset_path,
+          'eval_ex_yaml': eval_ex_yaml,
           'flip_loss': (dataset_name == 'stereoset'),
           'use_balance': (dataset_name == 'gender')
         }
@@ -302,20 +267,23 @@ if __name__ == '__main__':
 
     exp_name = MODEL_NAME.split('/')[-1] + '__' + dataset_path.split('/')[-1].split(".jsonl")[0]
     if args.noedit:
-      eval_results = eval_model_on_config(model, config_dict, eval_general_cache)
+      eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
       with open(f"{log_dir}/noedit.{exp_name}.json", 'w') as fh:
         print(json.dumps(eval_results), file=fh)
       continue 
 
-    param_keys = ['layers', 'v_num_grad_steps', 'clamp_norm_factor', 'mom2_update_weight', 'kl_factor']
-    for k in param_keys:
-      if override_params[k] is not None:
-        if type(override_params[k]) == list:
-          exp_name += '__' + '-'.join([str(x) for x in override_params[k]])
+    if args.override_exp_name is not None:
+      exp_name = args.override_exp_name
+    else:
+      param_keys = ['layers', 'v_num_grad_steps', 'clamp_norm_factor', 'mom2_update_weight', 'kl_factor']
+      for k in param_keys:
+        if override_params[k] is not None:
+          if type(override_params[k]) == list:
+            exp_name += '__' + '-'.join([str(x) for x in override_params[k]])
+          else:
+            exp_name += '__' + str(override_params[k])
         else:
-          exp_name += '__' + str(override_params[k])
-      else:
-        exp_name += '__na'
+          exp_name += '__na'
         
     print("exp_name", exp_name)
     if os.path.exists(f"{log_dir}/{exp_name}.json"):
@@ -342,7 +310,7 @@ if __name__ == '__main__':
         override_params=override_params
     )
 
-    eval_results = eval_model_on_config(model, config_dict)
+    eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
     eval_results['override_params'] = override_params
 
     all_results.append(eval_results)
