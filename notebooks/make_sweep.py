@@ -19,6 +19,8 @@ def get_sbatch_header(run_name, partition='jag-standard', nodelist='jagupard31',
 #SBATCH --nodelist={nodelist}
 
 export LD_LIBRARY_PATH=/nlp/scr/sachen/miniconda3/envs/backpacks-env/lib/
+
+source /nlp/scr/sachen/ref/switch-cuda/switch-cuda.sh 11.7
 """
 
 
@@ -96,6 +98,8 @@ def model_name_to_short(model_name):
 def make_noedit_run(
         sweep_script_dir,
         log_dir,
+        script_dir='scripts',
+        added_flags=[]
     ):
     model_names = [
         'backpack-gpt2',
@@ -112,17 +116,17 @@ def make_noedit_run(
         cmd = (
             f'python3 run_memit.py "{model_name_to_full[model_name]}" '
             '--noedit '
-            f'--log_dir {log_dir} '
-            f">> {sweep_script_dir}/logs/log.noedit.{model_name}.txt"
+            f'--log_dir {log_dir} ' + ' '.join(added_flags) + f" >> {sweep_script_dir}/logs/log.noedit.{model_name}.txt"
         )
         
 
         cur_model_name = model_name_to_short(model_name)
-        with open(f"{sweep_script_dir}/scripts/noedit_{cur_model_name}.sbatch", "w") as fh:
+        with open(f"{sweep_script_dir}/{script_dir}/noedit_{cur_model_name}.sbatch", "w") as fh:
             print(
                 get_sbatch_header(
                     run_name=f'{cur_model_name}-noedit', 
-                    partition=model_to_queue(model_name), 
+                    partition='jag-standard', 
+                    # partition=model_to_queue(model_name), 
                     nodelist=np.random.choice(model_to_jags(model_name)),
                     log_output_dir=f"{sweep_script_dir}/logs"
                 ),
@@ -132,7 +136,7 @@ def make_noedit_run(
                 f"srun --unbuffered run_as_child_processes '{cmd}'"
             )
             print(run_cmd, file=fh)
-        print(f"sbatch {sweep_script_dir}/scripts/noedit_{cur_model_name}.sbatch")
+        print(f"sbatch {sweep_script_dir}/{script_dir}/noedit_{cur_model_name}.sbatch")
     return None
 
 def make_sweep_valn_granular(
@@ -370,6 +374,12 @@ if __name__ == '__main__':
     make_noedit_run(
         sweep_script_dir='sbatches_100523',
         log_dir='log_memit_100223',
+    )
+    make_noedit_run(
+        sweep_script_dir='sbatches_100523',
+        log_dir='log_memit_100223_test_results',
+        script_dir='test_scripts',
+        added_flags=['--test_mode']
     )
 
     # make_sweep_valn_granular(
