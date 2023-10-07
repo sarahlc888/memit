@@ -12,6 +12,7 @@ import json
 import yaml 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from torch.cuda.amp import autocast
 import argparse
 from util import nethook
 from experiments.py.demo import load_alg, HPARAMS_DIR, print_loud
@@ -231,6 +232,7 @@ if __name__ == '__main__':
   all_results = []
 
   if MODEL_NAME == 'stanfordnlp/backpack-gpt2':
+    dtype = torch.float32
     tok = AutoTokenizer.from_pretrained('gpt2')
     config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, config=config, trust_remote_code=True).to("cuda")
@@ -243,10 +245,12 @@ if __name__ == '__main__':
     model.forward = new_forward
 
   else:
+    dtype = torch.bfloat16
     model, tok = (
       AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=(torch.float16 if any([x in MODEL_NAME for x in ["20b", "2.8b", '6.9b']]) else None),
+        torch_dtype=torch.bfloat16,
+        # torch_dtype=(torch.bfloat16 if 'pythia' in MODEL_NAME else None),
       ).to("cuda"),
       AutoTokenizer.from_pretrained(MODEL_NAME),
     )
@@ -267,7 +271,9 @@ if __name__ == '__main__':
 
     exp_name = MODEL_NAME.split('/')[-1] + '__' + dataset_path.split('/')[-1].split(".jsonl")[0]
     if args.noedit:
-      eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
+      with autocast(dtype=dtype):
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
+          eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
       with open(f"{log_dir}/noedit.{exp_name}.json", 'w') as fh:
         print(json.dumps(eval_results), file=fh)
       continue 
@@ -303,15 +309,16 @@ if __name__ == '__main__':
 
     # Execute rewrite
     request = [json.loads(line) for line in open(dataset_path)]
-    model_new, orig_weights = modified_demo_model_editing(
-        model, tok, request, alg_name=ALG_NAME, 
-        flip_loss=exp_config_dict['flip_loss'],
-        use_balance=exp_config_dict['use_balance'],
-        override_params=override_params
-    )
-
-    eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
-    eval_results['override_params'] = override_params
+    with autocast(dtype=dtype):
+      with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
+        model_new, orig_weights = modified_demo_model_editing(
+            model, tok, request, alg_name=ALG_NAME, 
+            flip_loss=exp_config_dict['flip_loss'],
+            use_balance=exp_config_dict['use_balance'],
+            override_params=override_params
+        )
+        eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
+        eval_results['override_params'] = override_params
 
     all_results.append(eval_results)
 
