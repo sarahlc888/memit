@@ -270,12 +270,14 @@ if __name__ == '__main__':
     config_dict = yaml.safe_load(open(config_path_for_eval))
 
     exp_name = MODEL_NAME.split('/')[-1] + '__' + dataset_path.split('/')[-1].split(".jsonl")[0]
+
+    # evaluate unedited model
+    with autocast(dtype=dtype):
+      with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
+        noedit_eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
     if args.noedit:
-      with autocast(dtype=dtype):
-        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
-          eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
       with open(f"{log_dir}/noedit.{exp_name}.json", 'w') as fh:
-        print(json.dumps(eval_results), file=fh)
+        print(json.dumps(noedit_eval_results), file=fh)
       continue 
 
     if args.override_exp_name is not None:
@@ -326,7 +328,10 @@ if __name__ == '__main__':
       model.save_pretrained(f"{save_dir}/{exp_name}")
 
     with open(f"{log_dir}/{exp_name}.json", 'w') as fh:
-      print(json.dumps(eval_results), file=fh)
+      print(json.dumps({
+        'noedit': noedit_eval_results,
+        'edit': eval_results
+      }), file=fh)
   print()
   print(config_list)
   print(all_results)
