@@ -262,9 +262,22 @@ if __name__ == '__main__':
       model.config.n_positions = model.config.max_position_embeddings
   tok.pad_token = tok.eos_token
 
-
   eval_general_cache = {}
   for i, exp_config_dict in enumerate(config_list):
+
+    # Restore fresh copy of model (reset weights)
+    try:
+      with torch.no_grad():
+        for k, v in orig_weights.items():
+            nethook.get_parameter(model, k)[...] = v
+      print("Original model restored")
+    except NameError as e:
+        print(f"No model weights to restore: {e}")
+
+
+    model.eval() 
+
+
     dataset_path = exp_config_dict['dataset_path']
     config_path_for_eval = exp_config_dict['eval_ex_yaml']
     config_dict = yaml.safe_load(open(config_path_for_eval))
@@ -299,15 +312,6 @@ if __name__ == '__main__':
       continue 
 
 
-
-    # Restore fresh copy of model
-    try:
-        with torch.no_grad():
-            for k, v in orig_weights.items():
-                nethook.get_parameter(model, k)[...] = v
-        print("Original model restored")
-    except NameError as e:
-        print(f"No model weights to restore: {e}")
 
     # Execute rewrite
     request = [json.loads(line) for line in open(dataset_path)]
