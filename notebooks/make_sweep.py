@@ -56,10 +56,10 @@ model_name_to_full = {
 }
 
 def model_to_queue(model_name):
-    # if '6.9b' in model_name:
-    #     return 'jag-standard'
-    # else:
-    return 'jag-lo'
+    if '6.9b' in model_name or '2.8b' in model_name or '1.4b' in model_name or '1b' in model_name or 'gpt-j' in model_name:
+        return 'jag-lo'
+    else:
+        return 'jag-standard'
     
 def model_to_jags(model_name):
     # if '6.9b' in model_name or '2.8b' in model_name or '1b' in model_name or 'gpt-j' in model_name or '160m' in model_name:
@@ -125,6 +125,8 @@ def make_sweep_valn_granular(sweep_script_dir, log_dir, n=10):
     v_num_grad_steps = 20
     machine_choosing_index = 0
 
+    fnames = []
+
     for model_name in model_names:
         for dataset_name in dataset_names:
             for i in range(n):
@@ -160,20 +162,34 @@ def make_sweep_valn_granular(sweep_script_dir, log_dir, n=10):
                         f">> {sweep_script_dir}/logs/log.{model_name}.{dataset_name}.{i}.txt"
                     )
                     print(run_cmd, file=fh)
+                    fnames.append(f"{sweep_script_dir}/scripts/{cur_model_name}_{dataset_name}_{i}.sbatch")
+    return fnames
 
 if __name__ == '__main__':
-    make_sweep_valn_granular(
-        sweep_script_dir='sbatches_100723',
-        log_dir='log_memit_100723',
+    fnames = make_sweep_valn_granular(
+        sweep_script_dir='sbatches_101023',
+        log_dir='log_memit_101023',
         n=10, 
     )
-    make_noedit_run(
-        sweep_script_dir='sbatches_100723',
-        log_dir='log_memit_100723',
-    )
-    make_noedit_run(
-        sweep_script_dir='sbatches_100723',
-        log_dir='log_memit_100723_test_results',
-        script_dir='test_scripts',
-        added_flags=['--test_mode']
-    )
+
+    # with open("to_launch_test_101023.sh", "w") as fh:
+    #     for fname in fnames:
+    #         if 'bpk' in fname or 'gpt-j' in fname:
+    #             continue
+    #         print(f'sbatch {fname}', file=fh)
+
+    # make_sweep_valn_granular(
+    #     sweep_script_dir='sbatches_100723',
+    #     log_dir='log_memit_100723',
+    #     n=10, 
+    # )
+    # # make_noedit_run(
+    # #     sweep_script_dir='sbatches_100723',
+    # #     log_dir='log_memit_100723',
+    # # )
+    # # make_noedit_run(
+    # #     sweep_script_dir='sbatches_100723',
+    # #     log_dir='log_memit_100723_test_results',
+    # #     script_dir='test_scripts',
+    # #     added_flags=['--test_mode']
+    # # )

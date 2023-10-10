@@ -245,12 +245,14 @@ if __name__ == '__main__':
     model.forward = new_forward
 
   else:
-    dtype = torch.bfloat16
+    dtype = torch.float16
+    print("DTYPE", dtype)
+    # TODO: float16 vs float32?
+    # note: bfloat16 -> val sweep did not fill many leagues
     model, tok = (
       AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.bfloat16,
-        # torch_dtype=(torch.bfloat16 if 'pythia' in MODEL_NAME else None),
+        torch_dtype=dtype,
       ).to("cuda"),
       AutoTokenizer.from_pretrained(MODEL_NAME),
     )
@@ -285,9 +287,12 @@ if __name__ == '__main__':
     exp_name = MODEL_NAME.split('/')[-1] + '__' + dataset_path.split('/')[-1].split(".jsonl")[0]
 
     # evaluate unedited model
-    with autocast(dtype=dtype):
-      with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
-        noedit_eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
+    if dtype == torch.bfloat16:
+      with autocast(dtype=dtype):
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
+          noedit_eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
+    else:
+      noedit_eval_results = eval_model_on_config(model, config_dict, eval_general_cache, test_mode=args.test_mode)
     if args.noedit:
       with open(f"{log_dir}/noedit.{exp_name}.json", 'w') as fh:
         print(json.dumps(noedit_eval_results), file=fh)
@@ -315,17 +320,27 @@ if __name__ == '__main__':
 
     # Execute rewrite
     request = [json.loads(line) for line in open(dataset_path)]
-    with autocast(dtype=dtype):
-      with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
-        model_new, orig_weights = modified_demo_model_editing(
-            model, tok, request, alg_name=ALG_NAME, 
-            flip_loss=exp_config_dict['flip_loss'],
-            use_balance=exp_config_dict['use_balance'],
-            override_params=override_params
-        )
-        eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
-        eval_results['override_params'] = override_params
 
+    if dtype == torch.bfloat16:
+      with autocast(dtype=dtype): 
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False):
+          model_new, orig_weights = modified_demo_model_editing(
+              model, tok, request, alg_name=ALG_NAME, 
+              flip_loss=exp_config_dict['flip_loss'],
+              use_balance=exp_config_dict['use_balance'],
+              override_params=override_params
+          )
+          eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
+    else:
+      model_new, orig_weights = modified_demo_model_editing(
+          model, tok, request, alg_name=ALG_NAME, 
+          flip_loss=exp_config_dict['flip_loss'],
+          use_balance=exp_config_dict['use_balance'],
+          override_params=override_params
+      )
+      eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
+
+    eval_results['override_params'] = override_params
     all_results.append(eval_results)
 
     if save_dir is not None:
