@@ -5,7 +5,7 @@
 # "EleutherAI/pythia-160m"
 save_dir = None 
 # log_dir = 'log_memit_results_layer_tuning'
-log_dir = 'log_memit_results_val_10'
+# log_dir = 'log_memit_results_val_10'
 
 ALG_NAME = "MEMIT"
 import json 
@@ -101,6 +101,7 @@ def modified_demo_model_editing(
     alg_name: str = "ROME",
     flip_loss: bool = False,
     use_balance: bool = False,
+    use_anti: bool = False,
     override_params = {},
 ) -> Tuple[AutoModelForCausalLM, Dict[str, torch.Tensor]]:
     """
@@ -135,7 +136,8 @@ def modified_demo_model_editing(
         hparams,
         return_orig_weights=True,
         flip_loss=flip_loss,
-        use_balance=use_balance
+        use_balance=use_balance,
+        use_anti=use_anti,
     )
 
 
@@ -220,7 +222,8 @@ if __name__ == '__main__':
           'dataset_path': dataset_path,
           'eval_ex_yaml': eval_ex_yaml,
           'flip_loss': (dataset_name == 'stereoset'),
-          'use_balance': (dataset_name == 'gender')
+          'use_balance': (dataset_name == 'gender'),
+          'use_anti': (dataset_name == 'verbs'),
         }
       )
   print("config_list", config_list)
@@ -253,6 +256,7 @@ if __name__ == '__main__':
       AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=dtype,
+        cache_dir="/u/scr/nlp/johnhew/data/huggingface/hub/"
       ).to("cuda"),
       AutoTokenizer.from_pretrained(MODEL_NAME),
     )
@@ -313,7 +317,7 @@ if __name__ == '__main__':
         
     print("exp_name", exp_name)
     if os.path.exists(f"{log_dir}/{exp_name}.json"):
-      print("Results already exist, skipping", exp_name)
+      print("Results already exist, skipping", exp_name, f"at {log_dir}/{exp_name}.json")
       continue 
 
 
@@ -328,6 +332,7 @@ if __name__ == '__main__':
               model, tok, request, alg_name=ALG_NAME, 
               flip_loss=exp_config_dict['flip_loss'],
               use_balance=exp_config_dict['use_balance'],
+              use_anti=exp_config_dict['use_anti'],
               override_params=override_params
           )
           eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)
@@ -336,6 +341,7 @@ if __name__ == '__main__':
           model, tok, request, alg_name=ALG_NAME, 
           flip_loss=exp_config_dict['flip_loss'],
           use_balance=exp_config_dict['use_balance'],
+          use_anti=exp_config_dict['use_anti'],
           override_params=override_params
       )
       eval_results = eval_model_on_config(model, config_dict, test_mode=args.test_mode)

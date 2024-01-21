@@ -13,7 +13,7 @@ from util.generate import generate_fast
 from util.globals import *
 
 from .compute_ks import compute_ks
-from .compute_z import compute_z, compute_z_balance, get_module_input_output_at_words, find_fact_lookup_idx
+from .compute_z import compute_z, compute_z_balance, compute_z_with_anti, get_module_input_output_at_words, find_fact_lookup_idx
 from .memit_hparams import MEMITHyperParams
 
 # Cache variable(s)
@@ -31,6 +31,7 @@ def apply_memit_to_model(
     cache_template: Optional[str] = None,
     flip_loss: bool = False,
     use_balance: bool = False,
+    use_anti: bool = False,
 ) -> Tuple[AutoModelForCausalLM, Dict[str, Any]]:
     """
     Returns a model with the desired changes.
@@ -44,7 +45,7 @@ def apply_memit_to_model(
         model = deepcopy(model)
 
     deltas = execute_memit(model, tok, requests, hparams, cache_template=cache_template, 
-                           use_balance=use_balance, flip_loss=flip_loss)
+                           use_balance=use_balance, use_anti=use_anti, flip_loss=flip_loss)
 
     with torch.no_grad():
         for w_name, (key_mat, val_mat) in deltas.items():
@@ -71,6 +72,7 @@ def execute_memit(
     cache_template: Optional[str] = None,
     flip_loss: bool = False,
     use_balance: bool = False,
+    use_anti: bool = False,
 ) -> Dict[str, Tuple[torch.Tensor]]:
     """
     Executes the MEMIT update algorithm for the specified update at the specified layer
@@ -131,24 +133,19 @@ def execute_memit(
 
         # Compute k/v pair if not loaded from cache
         if not data_loaded:
-            if use_balance:
-                cur_z = compute_z_balance(model,
-                    tok,
-                    request,
-                    hparams,
-                    z_layer,
-                    context_templates,
-                    flip_loss=flip_loss,)
+            if use_anti:
+                comp_z_func = compute_z_with_anti
+            elif use_balance:
+                comp_z_func = compute_z_balance
             else:
-                cur_z = compute_z(
-                    model,
-                    tok,
-                    request,
-                    hparams,
-                    z_layer,
-                    context_templates,
-                    flip_loss=flip_loss,
-                )
+                comp_z_func = compute_z
+            cur_z = comp_z_func(model,
+                tok,
+                request,
+                hparams,
+                z_layer,
+                context_templates,
+                flip_loss=flip_loss,)
 
             z_list.append(cur_z)
 
