@@ -530,21 +530,15 @@ def compute_z_with_anti(
         full_repr = tr[hparams.layer_module_tmp.format(loss_layer)].output[0][
             : len(rewriting_prompts + rewriting_prompts_anti)
         ]
-        # print("full_repr.shape", full_repr.shape)
         intermed_var = ln_f(full_repr) @ lm_w + lm_b
-        # print("intermed_var.shape", intermed_var.shape)
         log_probs = torch.log_softmax(intermed_var, dim=2)
-        # print("log_probs.shape", log_probs.shape)
         loss = torch.gather(
             log_probs,
             2,
             torch.where(rewriting_targets != -100, rewriting_targets, 0).unsqueeze(2),
         ).squeeze(2)
-        # print("loss.shape", loss.shape)
 
-        # TODO: check
         mask = (rewriting_targets != -100).float()
-        # mask = (rewriting_targets != -100).float()
         # Aggregate total losses
         nll_loss_each = -(loss * mask).sum(1) / target_ids.size(0)
         if flip_loss:
@@ -554,8 +548,6 @@ def compute_z_with_anti(
         nll_loss_anti = nll_loss_each[len(rewriting_prompts):len(rewriting_prompts)+len(rewriting_prompts_anti)].mean()
         # Loss is -log(p(A)/p(B)) = log(p(B)) - log(p(A)) = -log(p(A)) - -log(p(B))
         nll_loss = nll_loss_target - nll_loss_anti 
-        # print("i", 0, "->", nll_loss_each[:10])
-        # print("i", 1, "->", nll_loss_each[len(rewriting_prompts):len(rewriting_prompts)+10])
 
         if debug_double_check:
             # verify correctness
@@ -568,46 +560,22 @@ def compute_z_with_anti(
                 assert ( torch.isclose(full_repr[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], full_repr_redo).all())
                 cur_rewriting_targets = rewriting_targets[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)]
                 
-                # intermed_var_redo = ln_f(full_repr_redo) @ lm_w + lm_b
-                # print("DEBUG: intermed_var_redo", torch.isclose(
-                #     intermed_var[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
-                #     intermed_var_redo).all())
-                # print(torch.max(torch.abs( intermed_var_redo - intermed_var[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)] )))
-
                 log_probs_redo = torch.log_softmax(ln_f(full_repr_redo) @ lm_w + lm_b, dim=2)
-
-                cur_diff = torch.abs(log_probs_redo - log_probs[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)])
-                # print("DEBUG: log probs", torch.isclose(
-                #     log_probs[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
-                #     log_probs_redo).all(),
-                #     torch.max(cur_diff))
                 loss_redo = torch.gather(
                     log_probs_redo,
                     2,
                     torch.where(cur_rewriting_targets != -100, cur_rewriting_targets, 0).unsqueeze(2),
                 ).squeeze(2)
-                # print("loss_redo.shape", loss_redo.shape)
-                # print("DEBUG: loss", torch.isclose(
-                #     loss[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
-                #     loss_redo).all(),
-                #     torch.max(torch.abs(loss_redo - loss[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)])))
-                # mask_redo = (cur_rewriting_targets != -100).float() # TODO: check
                 mask_redo = (cur_rewriting_targets != -100).float()
                 assert (torch.isclose(
                     mask[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
                     mask_redo).all())
                 # Aggregate total losses
                 nll_loss_each_redo = -(loss_redo * mask_redo).sum(1) / target_ids.size(0)
-                # print("i", i, "->", nll_loss_each_redo[:10])
                 nll_loss_dict[i] = nll_loss_each_redo.mean()
-                # print("DEBUG: nll_loss_each", torch.isclose(
-                #     nll_loss_each[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
-                #     nll_loss_each_redo).all(),
-                #     torch.max(torch.abs(nll_loss_each_redo - nll_loss_each[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)])))
 
             # make sure the losses are close together
-            print(f"DEBUG [{request['target_new']['str']}] VS [{request['target_anti']['str']}]")
-            print("DEBUG DIFFERENCE", nll_loss - (nll_loss_dict[0] - nll_loss_dict[1]))
+            print("\t(debug) DIFFERENCE", (nll_loss - (nll_loss_dict[0] - nll_loss_dict[1])).item())
             assert torch.isclose(nll_loss, (nll_loss_dict[0] - nll_loss_dict[1]), atol=1e-2), \
                 f"Severe mismatch between {(nll_loss, (nll_loss_dict[0] - nll_loss_dict[1]))}"
 
@@ -619,7 +587,7 @@ def compute_z_with_anti(
             torch.norm(delta) / torch.norm(target_init) ** 2
         )
         # weight_decay = hparams.v_weight_decay * torch.norm(delta) ** 2
-        print('DEBUG ratio:', nll_loss, kl_loss, weight_decay)
+
         loss = nll_loss + kl_loss + weight_decay
         if not flip_loss:
             print(
@@ -634,10 +602,9 @@ def compute_z_with_anti(
                 f"{torch.exp(nll_loss_each).mean().item()}"
             )
         
-        if not flip_loss and loss < 5e-2:
-            break
-
-        if flip_loss and loss < -50: # TODO: validate this stopping condition
+        # custom stopping condition that matches the balance case
+        # (since we are minimizing the difference, the loss should actually be allowed to become negative) 
+        if loss < -50: 
             break
 
         if it == hparams.v_num_grad_steps - 1:
