@@ -1,3 +1,6 @@
+# Make scripts to run MEMIT hyperparameter sweep
+# (Include cluster-specific logic that must be modified for compatibility)
+
 import random
 import numpy as np
 
@@ -62,16 +65,7 @@ def model_to_queue(model_name):
         return 'jag-standard'
     
 def model_to_jags(model_name):
-    # if '6.9b' in model_name or '2.8b' in model_name or '1b' in model_name or 'gpt-j' in model_name or '160m' in model_name:
-    #     return ['jagupard37', 'jagupard38', 'jagupard39']
-    # elif '1.4b' in model_name:
-    #     return ['jagupard32', 'jagupard33', 'jagupard34', 'jagupard35', 'jagupard36']
-    # elif '410m' in model_name:
-    #     return ['jagupard30', 'jagupard31', ]
-    # elif '70m' in model_name or 'backpack' in model_name:
-    #     return ['jagupard28', 'jagupard29', ]
-    # else:
-    #     raise ValueError
+    # Map model to machine to use
     if '6.9b' in model_name or '2.8b' in model_name or '1.4b' in model_name or '1b' in model_name \
         or 'gpt-j' in model_name:
         return ['jagupard37', 'jagupard38', 'jagupard39']
@@ -171,25 +165,3 @@ if __name__ == '__main__':
         log_dir='log_memit_101023',
         n=10, 
     )
-
-    # with open("to_launch_test_101023.sh", "w") as fh:
-    #     for fname in fnames:
-    #         if 'bpk' in fname or 'gpt-j' in fname:
-    #             continue
-    #         print(f'sbatch {fname}', file=fh)
-
-    # make_sweep_valn_granular(
-    #     sweep_script_dir='sbatches_100723',
-    #     log_dir='log_memit_100723',
-    #     n=10, 
-    # )
-    # # make_noedit_run(
-    # #     sweep_script_dir='sbatches_100723',
-    # #     log_dir='log_memit_100723',
-    # # )
-    # # make_noedit_run(
-    # #     sweep_script_dir='sbatches_100723',
-    # #     log_dir='log_memit_100723_test_results',
-    # #     script_dir='test_scripts',
-    # #     added_flags=['--test_mode']
-    # # )

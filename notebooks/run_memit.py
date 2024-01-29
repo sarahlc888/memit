@@ -1,11 +1,6 @@
 # run memit for various models and datasets
-# MODEL_NAME = "stanfordnlp/backpack-gpt2"
-# 'gpt2-xl' 
-# "EleutherAI/gpt-j-6B"
-# "EleutherAI/pythia-160m"
+
 save_dir = None 
-# log_dir = 'log_memit_results_layer_tuning'
-# log_dir = 'log_memit_results_val_10'
 
 ALG_NAME = "MEMIT"
 import json 

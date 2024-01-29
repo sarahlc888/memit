@@ -399,7 +399,6 @@ def compute_z_with_anti(
     layer: int,
     context_templates: List[str],
     flip_loss: bool = False,
-    debug_double_check: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Computes the value (right) vector for the rank-1 update.
@@ -548,36 +547,6 @@ def compute_z_with_anti(
         nll_loss_anti = nll_loss_each[len(rewriting_prompts):len(rewriting_prompts)+len(rewriting_prompts_anti)].mean()
         # Loss is -log(p(A)/p(B)) = log(p(B)) - log(p(A)) = -log(p(A)) - -log(p(B))
         nll_loss = nll_loss_target - nll_loss_anti 
-
-        if debug_double_check:
-            # verify correctness
-            nll_loss_dict = {}
-            for i in range(2):
-                # print("computing loss for target or anti-target:", i) 
-                full_repr_redo = tr[hparams.layer_module_tmp.format(loss_layer)].output[0][
-                    (len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)
-                ]
-                assert ( torch.isclose(full_repr[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], full_repr_redo).all())
-                cur_rewriting_targets = rewriting_targets[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)]
-                
-                log_probs_redo = torch.log_softmax(ln_f(full_repr_redo) @ lm_w + lm_b, dim=2)
-                loss_redo = torch.gather(
-                    log_probs_redo,
-                    2,
-                    torch.where(cur_rewriting_targets != -100, cur_rewriting_targets, 0).unsqueeze(2),
-                ).squeeze(2)
-                mask_redo = (cur_rewriting_targets != -100).float()
-                assert (torch.isclose(
-                    mask[(len(rewriting_prompts))*(i) : (len(rewriting_prompts))*(i+1)], 
-                    mask_redo).all())
-                # Aggregate total losses
-                nll_loss_each_redo = -(loss_redo * mask_redo).sum(1) / target_ids.size(0)
-                nll_loss_dict[i] = nll_loss_each_redo.mean()
-
-            # make sure the losses are close together
-            print("\t(debug) DIFFERENCE", (nll_loss - (nll_loss_dict[0] - nll_loss_dict[1])).item())
-            assert torch.isclose(nll_loss, (nll_loss_dict[0] - nll_loss_dict[1]), atol=1e-2), \
-                f"Severe mismatch between {(nll_loss, (nll_loss_dict[0] - nll_loss_dict[1]))}"
 
         
         kl_loss = hparams.kl_factor * torch.nn.functional.kl_div(
